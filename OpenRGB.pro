@@ -142,6 +142,8 @@ INCLUDEPATH +=                                                                  
     dependencies/httplib                                                                        \
     dependencies/json/                                                                          \
     dependencies/mdns                                                                           \
+    dependencies/tinyuz                                                                         \
+    dependencies/HDiffPatch/libHDiffPatch/HDiff/private_diff/libdivsufsort                      \
     dmiinfo/                                                                                    \
     hidapi_wrapper/                                                                             \
     i2c_smbus/                                                                                  \
@@ -204,9 +206,19 @@ HEADERS +=                                                                      
     RGBController/RGBController_Network.h                                                       \
     startup/startup.h                                                                           \
 
+DEFINES +=                                                                                      \
+    _IS_USED_MULTITHREAD=0                                                                      \
+
 SOURCES +=                                                                                      \
     $$GUI_CPP                                                                                   \
     $$CONTROLLER_CPP                                                                            \
+    dependencies/tinyuz/compress/tuz_enc.cpp                                                    \
+    dependencies/tinyuz/compress/tuz_enc_private/tuz_enc_clip.cpp                               \
+    dependencies/tinyuz/compress/tuz_enc_private/tuz_enc_code.cpp                               \
+    dependencies/tinyuz/compress/tuz_enc_private/tuz_enc_match.cpp                              \
+    dependencies/tinyuz/compress/tuz_enc_private/tuz_sstring.cpp                                \
+    dependencies/tinyuz/decompress/tuz_dec.c                                                    \
+    dependencies/HDiffPatch/libHDiffPatch/HDiff/private_diff/libdivsufsort/divsufsort.cpp       \
     dependencies/ColorWheel/ColorWheel.cpp                                                      \
     dependencies/hueplusplus-1.2.0/src/Action.cpp                                               \
     dependencies/hueplusplus-1.2.0/src/APICache.cpp                                             \
