@@ -5,6 +5,7 @@
 OpenRGB
 openrgb
 OpenRGB-x86_64.AppImage
+OpenRGB-baseline-backup/
 60-openrgb.rules
 debian/changelog
 fedora/OpenRGB.spec

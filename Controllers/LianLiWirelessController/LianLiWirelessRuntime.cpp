@@ -61,36 +61,103 @@ void WirelessRuntime::Enter(WirelessState s, const char* err)
     {
         last_error = err;
     }
+    else if(s == WirelessState::Holding)
+    {
+        last_error.clear();
+    }
+}
+
+void WirelessRuntime::TransportFailed(const char* err)
+{
+    have_sighting = false;
+    Enter(WirelessState::Failed, err);
+    retry_transport = true;
+    next_reconnect_ms = clock.NowMs() + cfg.reconnect_ms;
+}
+
+void WirelessRuntime::RetryTransport()
+{
+    /* Preserve the desired profile and original master identity, but
+       discard all observations/counters from before the outage. */
+    master_known = false;
+    have_sighting = false;
+    latest = {};
+    last_seen_ms = 0;
+    master_read_tries = 0;
+    master_mismatch = 0;
+    poll_failures = 0;
+    send_failures = 0;
+    keepalive_failures = 0;
+    resends = 0;
+    drift_mismatch = 0;
+    next_poll_ms = 0;
+    next_resend_ms = 0;
+    next_keepalive_ms = 0;
+    keepalive_initial = true;
+    retry_transport = false;
+    Enter(WirelessState::Boot);
+}
+
+void WirelessRuntime::RevalidateTransport(const char* err)
+{
+    /* Even one failed operation can invalidate and reopen the USB pair.
+       Re-read its identity before any further discovery-driven writes. */
+    master_known = false;
+    have_sighting = false;
+    latest = {};
+    master_read_tries = 0;
+    master_mismatch = 0;
+    keepalive_initial = true;
+    next_keepalive_ms = 0;
+    next_resend_ms = 0;
+    next_poll_ms = clock.NowMs() + cfg.poll_ms;
+    Enter(WirelessState::Boot, err);
 }
 
 void WirelessRuntime::Tick()
 {
-    if(cancelled || state == WirelessState::Failed
-                  || state == WirelessState::ForeignMaster)
+    if(cancelled || state == WirelessState::ForeignMaster)
     {
         return;
     }
 
     uint64_t now = clock.NowMs();
+    if(state == WirelessState::Failed)
+    {
+        if(!retry_transport || now < next_reconnect_ms)
+        {
+            return;
+        }
+        RetryTransport();
+    }
+    if(master_known && connection_generation != link.ConnectionGeneration())
+    {
+        RevalidateTransport("shared USB connection changed");
+        return;
+    }
 
     /*---------------------------------------------------------*\
     | Keep-alive takes priority over animation traffic and is   |
     | required before the device will reliably accept uploads.  |
     \*---------------------------------------------------------*/
-    if(master_known && now >= next_keepalive_ms)
+    if(master_known && have_sighting && now >= next_keepalive_ms)
     {
         if(!SendKeepAlive(now, keepalive_initial))
         {
-            if(++send_failures >= cfg.max_send_failures)
+            if(++keepalive_failures >= cfg.max_send_failures)
             {
-                Enter(WirelessState::Failed, "keep-alive transport failure");
-                return;
+                TransportFailed("keep-alive transport failure");
             }
+            else
+            {
+                RevalidateTransport("keep-alive transport failure");
+            }
+            return;
         }
         else
         {
             keepalive_initial  = false;
-            send_failures      = 0;
+            keepalive_failures = 0;
             next_keepalive_ms  = now + cfg.keepalive_ms;
         }
     }
@@ -156,7 +223,7 @@ void WirelessRuntime::Tick()
                     next_resend_ms = now;
                 }
 
-                if(state == WirelessState::Uploading && now >= next_resend_ms)
+                if(state == WirelessState::Uploading && !keepalive_initial && now >= next_resend_ms)
                 {
                     SendDesired(now);
                 }
@@ -176,15 +243,24 @@ bool WirelessRuntime::PollAndMerge(uint64_t now)
 {
     if(state == WirelessState::Boot)
     {
-        if(!link.ReadMasterMac(master))
+        Mac current_master{};
+        if(!link.ReadMasterMac(current_master))
         {
             if(++master_read_tries >= 3)
             {
-                Enter(WirelessState::Failed, "cannot read master MAC");
+                TransportFailed("cannot read master MAC");
                 return false;
             }
-            return true;                    /* retry next poll */
+            return false;                   /* retry next poll */
         }
+        if(master != Mac{} && current_master != master)
+        {
+            Enter(WirelessState::ForeignMaster, "transmitter identity changed");
+            return false;
+        }
+        master = current_master;
+        connection_generation = link.ConnectionGeneration();
+        master_read_tries = 0;
         master_known = true;
         Enter(WirelessState::Searching);
     }
@@ -192,6 +268,7 @@ bool WirelessRuntime::PollAndMerge(uint64_t now)
     std::vector<uint8_t> response;
     if(!link.PollDiscovery(response))
     {
+        have_sighting = false;
         /*---------------------------------------------------------*\
         | USB-level failure is not a miss — it is a transport       |
         | problem and counts toward failure. Kept separate from     |
@@ -199,10 +276,11 @@ bool WirelessRuntime::PollAndMerge(uint64_t now)
         \*---------------------------------------------------------*/
         if(++poll_failures >= cfg.max_send_failures)
         {
-            Enter(WirelessState::Failed, "discovery transport failure");
+            TransportFailed("discovery transport failure");
             return false;
         }
-        return true;
+        RevalidateTransport("discovery transport failure");
+        return false;           /* failed RX is not a fresh observation */
     }
     poll_failures = 0;
 
@@ -251,15 +329,24 @@ bool WirelessRuntime::PollAndMerge(uint64_t now)
     \*---------------------------------------------------------*/
     if(master_known && found->master != master)
     {
+        have_sighting = false;
         if(++master_mismatch >= cfg.master_debounce)
         {
             Enter(WirelessState::ForeignMaster, "wireless master changed");
             return false;
         }
+        return false;           /* debounce ownership without writing to it */
     }
     else
     {
         master_mismatch = 0;
+    }
+
+    if(found->fan_count != expected_fans || found->mb_rgb_sync)
+    {
+        have_sighting = false;
+        Enter(WirelessState::Failed, "fan layout or motherboard RGB ownership changed");
+        return false;
     }
 
     latest        = *found;
@@ -298,7 +385,11 @@ bool WirelessRuntime::SendDesired(uint64_t now)
     {
         if(++send_failures >= cfg.max_send_failures)
         {
-            Enter(WirelessState::Failed, "upload transport failure");
+            TransportFailed("upload transport failure");
+        }
+        else
+        {
+            RevalidateTransport("upload transport failure");
         }
         return false;
     }

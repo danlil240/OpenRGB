@@ -51,6 +51,9 @@ namespace LianLiWireless
         virtual bool ReadMasterMac(Mac& out)                                   = 0;
         virtual bool PollDiscovery(std::vector<uint8_t>& out)                  = 0;
         virtual bool SendChunks(const std::array<UsbChunk, USB_CHUNKS_PER_PACKET>& chunks) = 0;
+        /* Changes whenever a shared link drops/reopens its USB handles.
+           Access is serialized by the service worker with all link I/O. */
+        virtual uint64_t ConnectionGeneration() const { return 0; }
         virtual ~IWirelessLink() = default;
     };
 
@@ -62,7 +65,7 @@ namespace LianLiWireless
         Holding,        /* confirmed; watching for drift       */
         Lost,           /* sustained absence past deadline     */
         ForeignMaster,  /* target re-bound to another master   */
-        Failed,         /* transport or retry exhaustion       */
+        Failed,         /* transport backoff or terminal upload failure */
         Cancelled,
     };
 
@@ -77,6 +80,7 @@ namespace LianLiWireless
         uint32_t drift_debounce   = 3;      /* consecutive mismatches -> resend */
         uint32_t max_send_failures = 5;     /* transport failures -> Failed  */
         uint32_t max_resends      = 8;      /* per-upload resend budget      */
+        uint64_t reconnect_ms     = 3000;   /* delay between transport retry batches */
     };
 
     class WirelessRuntime
@@ -102,7 +106,7 @@ namespace LianLiWireless
         const Sighting* Latest()       const { return have_sighting ? &latest : nullptr; }
         bool            Confirmed()    const;
         size_t          ResendCount()  const { return resends; }
-        size_t          SendFailures() const { return send_failures; }
+        size_t          SendFailures() const { return send_failures + keepalive_failures; }
         const char*     LastError()    const { return last_error.c_str(); }
 
     private:
@@ -110,6 +114,9 @@ namespace LianLiWireless
         bool SendDesired(uint64_t now);
         bool SendKeepAlive(uint64_t now, bool initial);
         void Enter(WirelessState s, const char* err = "");
+        void TransportFailed(const char* err);
+        void RevalidateTransport(const char* err);
+        void RetryTransport();
 
         IWirelessLink&       link;
         IWirelessClock&      clock;
@@ -130,6 +137,7 @@ namespace LianLiWireless
         uint64_t             next_resend_ms = 0;
         uint32_t             resends = 0;
         uint32_t             send_failures = 0;
+        uint32_t             keepalive_failures = 0;
         uint32_t             poll_failures = 0;
         uint32_t             master_mismatch = 0;
         uint32_t             drift_mismatch = 0;
@@ -141,5 +149,8 @@ namespace LianLiWireless
 
         std::string          last_error;
         bool                 cancelled = false;
+        bool                 retry_transport = false;
+        uint64_t             next_reconnect_ms = 0;
+        uint64_t             connection_generation = 0;
     };
 }

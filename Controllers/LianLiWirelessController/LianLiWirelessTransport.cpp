@@ -137,6 +137,10 @@ LianLiWirelessUsbLink::~LianLiWirelessUsbLink()
 
 void LianLiWirelessUsbLink::Close()
 {
+    if(tx != nullptr || rx != nullptr)
+    {
+        ++connection_generation;
+    }
     if(rx != nullptr)
     {
         libusb_release_interface(rx, 0);
@@ -273,6 +277,7 @@ bool LianLiWirelessUsbLink::EnsureOpen()
 
     tx = new_tx;
     rx = new_rx;
+    ++connection_generation;
     return true;
 }
 
