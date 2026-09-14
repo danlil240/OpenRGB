@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - -I../../dependencies
+    - -I../../dependencies/libusb-1.0.27/include
+    - -I../../dependencies/tinyuz
+    - -I../../dependencies/HDiffPatch
+    - -D_IS_USED_MULTITHREAD=0
+    - -std=c++17
