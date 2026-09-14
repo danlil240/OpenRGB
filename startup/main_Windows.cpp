@@ -14,7 +14,10 @@
 #include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
+#include <vector>
 #include <windows.h>
+#include <tlhelp32.h>
 #include <thread>
 
 #include <QApplication>
@@ -382,6 +385,75 @@ static void WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv)
 |   Entry point, checks if started as a service and then    |
 |   calls the common main processing                        |
 \*---------------------------------------------------------*/
+/*---------------------------------------------------------*\
+| Single-instance guard helpers                             |
+|                                                           |
+| FindOtherOpenRGBInstances enumerates processes named      |
+| OpenRGB.exe other than this one.                          |
+| TerminateOtherInstances closes them, waiting up to 10s    |
+| per process. Fails when an instance is elevated and this  |
+| one is not.                                               |
+\*---------------------------------------------------------*/
+static bool FindOtherOpenRGBInstances(std::vector<DWORD>& pids)
+{
+    DWORD  current_pid = GetCurrentProcessId();
+    HANDLE snapshot    = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+    if(snapshot == INVALID_HANDLE_VALUE)
+    {
+        return false;
+    }
+
+    PROCESSENTRY32 entry;
+    entry.dwSize = sizeof(entry);
+
+    if(Process32First(snapshot, &entry))
+    {
+        do
+        {
+            if(_stricmp(entry.szExeFile, "OpenRGB.exe") == 0
+            && entry.th32ProcessID != current_pid)
+            {
+                pids.push_back(entry.th32ProcessID);
+            }
+        }
+        while(Process32Next(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+
+    return (pids.size() > 0);
+}
+
+static bool TerminateOtherInstances(const std::vector<DWORD>& pids)
+{
+    bool all_terminated = true;
+
+    for(DWORD pid: pids)
+    {
+        HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+
+        if(process == NULL)
+        {
+            all_terminated = false;
+            continue;
+        }
+
+        if(!TerminateProcess(process, 0))
+        {
+            all_terminated = false;
+        }
+        else
+        {
+            WaitForSingleObject(process, 10000);
+        }
+
+        CloseHandle(process);
+    }
+
+    return all_terminated;
+}
+
 int main(int argc, char* argv[])
 {
     started_as_service = false;
@@ -460,6 +532,42 @@ int main(int argc, char* argv[])
         freopen("CONOUT$", "w", stdout);
         freopen("CONOUT$", "w", stderr);
         have_console = true;
+    }
+
+    /*-----------------------------------------------------*\
+    | Single-instance guard: if another OpenRGB.exe is     |
+    | running, offer to close it or exit this copy. This    |
+    | prevents two instances fighting over the same        |
+    | devices and SDK port.                                 |
+    \*-----------------------------------------------------*/
+    std::vector<DWORD> other_pids;
+
+    if(FindOtherOpenRGBInstances(other_pids))
+    {
+        char prompt[512];
+
+        snprintf(prompt, sizeof(prompt),
+                 "Another OpenRGB instance is already running (PID %lu).\n\n"
+                 "Two instances will fight over the same devices.\n\n"
+                 "Yes - close the existing instance and start this one\n"
+                 "No  - exit this copy (keep the existing instance)",
+                 (unsigned long)other_pids.front());
+
+        if(MessageBoxA(NULL, prompt, "OpenRGB",
+                       MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST) == IDNO)
+        {
+            return EXIT_SUCCESS;
+        }
+
+        if(!TerminateOtherInstances(other_pids))
+        {
+            MessageBoxA(NULL,
+                        "The existing instance could not be closed (it may be\n"
+                        "running as administrator). Close it manually, or run\n"
+                        "this copy as administrator, then try again.",
+                        "OpenRGB", MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+            return EXIT_FAILURE;
+        }
     }
 
     return common_main(argc, argv);
