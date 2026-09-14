@@ -18,6 +18,8 @@
 #include <vector>
 #include <windows.h>
 #include <tlhelp32.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <thread>
 
 #include <QApplication>
@@ -454,6 +456,66 @@ static bool TerminateOtherInstances(const std::vector<DWORD>& pids)
     return all_terminated;
 }
 
+/*---------------------------------------------------------*\
+|| IsSDKServerRunning                                        |
+||                                                           |
+||   Try to connect to 127.0.0.1:6742 to check whether the   |
+||   running instance is already acting as an SDK server.    |
+||   Used by the single-instance guard to decide whether a   |
+||   second launch should become a GUI client instead of     |
+||   prompting to kill the existing instance.                |
+\*---------------------------------------------------------*/
+static bool IsSDKServerRunning()
+{
+    WSADATA wsa;
+    if(WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        return false;
+    }
+
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if(s == INVALID_SOCKET)
+    {
+        WSACleanup();
+        return false;
+    }
+
+    DWORD timeout = 500;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(6742);
+    InetPtonA(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    bool running = (connect(s, (sockaddr*)&addr, sizeof(addr)) == 0);
+
+    closesocket(s);
+    WSACleanup();
+
+    return running;
+}
+
+/*---------------------------------------------------------*\
+|| HasServerFlag                                             |
+||                                                           |
+||   Check argv for --server to distinguish a server launch  |
+||   from a GUI client launch.                               |
+\*---------------------------------------------------------*/
+static bool HasServerFlag(int argc, char* argv[])
+{
+    for(int i = 1; i < argc; i++)
+    {
+        if(_stricmp(argv[i], "--server") == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 int main(int argc, char* argv[])
 {
     started_as_service = false;
@@ -544,6 +606,29 @@ int main(int argc, char* argv[])
 
     if(FindOtherOpenRGBInstances(other_pids))
     {
+        /*-------------------------------------------------*\
+        | If the running instance is an SDK server and this |
+        | launch is a GUI client (no --server flag), skip   |
+        | the guard entirely. Inject --nodetect so this     |
+        | client doesn't fight over hardware — it connects  |
+        | to the server via the SDK autoconnect instead.    |
+        \*-------------------------------------------------*/
+        if(!HasServerFlag(argc, argv) && IsSDKServerRunning())
+        {
+            char* client_argv[64];
+            int   client_argc = 0;
+
+            for(int i = 0; i < argc && client_argc < 62; i++)
+            {
+                client_argv[client_argc++] = argv[i];
+            }
+
+            client_argv[client_argc++] = (char*)"--nodetect";
+            client_argv[client_argc]   = nullptr;
+
+            return common_main(client_argc, client_argv);
+        }
+
         char prompt[512];
 
         snprintf(prompt, sizeof(prompt),
