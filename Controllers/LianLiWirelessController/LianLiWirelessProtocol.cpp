@@ -131,7 +131,7 @@ std::vector<Sighting> LianLiWireless::ParseDiscoveryResponse(const uint8_t* data
 }
 
 RgbUpload::RgbUpload(std::vector<uint8_t> compressed_in, uint8_t led_count_in,
-                     uint16_t frame_count_in, RgbTiming timing_in)
+                     uint16_t frame_count_in, RgbTiming timing_in, uint8_t variant)
     : compressed(std::move(compressed_in))
     , led_count(led_count_in)
     , frame_count(frame_count_in)
@@ -173,6 +173,7 @@ RgbUpload::RgbUpload(std::vector<uint8_t> compressed_in, uint8_t led_count_in,
     mix((uint8_t)(timing.secondary_frame_count >> 8));
     mix((uint8_t)timing.secondary_frame_count);
     mix(timing.outer_longest ? 1 : 0);
+    mix(variant);
 
     uint32_t id = std::max<uint32_t>(hash, 1);
     effect_id = { (uint8_t)(id >> 24), (uint8_t)(id >> 16),

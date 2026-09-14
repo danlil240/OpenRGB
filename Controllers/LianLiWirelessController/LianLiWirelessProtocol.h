@@ -112,9 +112,14 @@ namespace LianLiWireless
     class RgbUpload
     {
     public:
-        /* compressed must already be tinyuz-encoded */
+        /*---------------------------------------------------------*\
+        | compressed must already be tinyuz-encoded. variant salts  |
+        | the effect ID: the firmware ignores reuse of an ID it has |
+        | already seen, so re-uploading identical content requires  |
+        | a different variant.                                      |
+        \*---------------------------------------------------------*/
         RgbUpload(std::vector<uint8_t> compressed, uint8_t led_count,
-                  uint16_t frame_count, RgbTiming timing);
+                  uint16_t frame_count, RgbTiming timing, uint8_t variant = 0);
 
         const std::array<uint8_t, 4>& EffectId() const { return effect_id; }
         uint8_t LedCount()    const { return led_count; }

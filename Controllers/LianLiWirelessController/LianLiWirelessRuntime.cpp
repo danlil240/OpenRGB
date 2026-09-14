@@ -143,6 +143,18 @@ void WirelessRuntime::Tick()
                         next_resend_ms = now;
                     }
                 }
+                else if(state == WirelessState::Lost)
+                {
+                    /*----------------------------------------------*\
+                    | Device returned reporting a different effect — |
+                    | resume uploading with a fresh resend budget;   |
+                    | sends during the absence were not progress.    |
+                    \*----------------------------------------------*/
+                    resends        = 0;
+                    drift_mismatch = 0;
+                    Enter(WirelessState::Uploading);
+                    next_resend_ms = now;
+                }
 
                 if(state == WirelessState::Uploading && now >= next_resend_ms)
                 {
@@ -216,11 +228,17 @@ bool WirelessRuntime::PollAndMerge(uint64_t now)
 
     if(found == nullptr)
     {
+        /*---------------------------------------------------------*\
+        | A stale sighting is not an observation — clear it so the  |
+        | Tick state machine stops resending to a vanished device.  |
+        \*---------------------------------------------------------*/
         if(have_sighting && now - last_seen_ms > cfg.lost_ms)
         {
+            have_sighting = false;
             Enter(WirelessState::Lost, "target absent past deadline");
         }
-        else if(!have_sighting && now > cfg.lost_ms)
+        else if(!have_sighting && now > cfg.lost_ms
+                && state != WirelessState::Lost)
         {
             Enter(WirelessState::Lost, "target never sighted");
         }
@@ -293,8 +311,10 @@ bool WirelessRuntime::SendDesired(uint64_t now)
 
 bool WirelessRuntime::SendKeepAlive(uint64_t /*now*/, bool initial)
 {
-    /* real implementation reads wall clock; tests pass fixed time */
+    uint16_t year   = 2000;
+    uint8_t  month  = 1, day = 1, hour = 0, minute = 0, second = 0;
+    clock.WallClock(year, month, day, hour, minute, second);
     auto chunks = ClockChunks(master, have_sighting ? latest.channel : 0,
-                              2000, 1, 1, 0, 0, 0, initial);
+                              year, month, day, hour, minute, second, initial);
     return link.SendChunks(chunks);
 }

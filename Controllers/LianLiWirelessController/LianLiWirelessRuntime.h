@@ -23,6 +23,19 @@ namespace LianLiWireless
     struct IWirelessClock
     {
         virtual uint64_t NowMs() = 0;
+
+        /*---------------------------------------------------------*\
+        | Optional local wall-clock time carried by keep-alive      |
+        | packets. Default false -> runtime sends a fixed           |
+        | timestamp (used by tests).                                |
+        \*---------------------------------------------------------*/
+        virtual bool WallClock(uint16_t& /*year*/, uint8_t& /*month*/,
+                               uint8_t& /*day*/, uint8_t& /*hour*/,
+                               uint8_t& /*minute*/, uint8_t& /*second*/)
+        {
+            return false;
+        }
+
         virtual ~IWirelessClock() = default;
     };
 
