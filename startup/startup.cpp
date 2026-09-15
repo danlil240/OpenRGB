@@ -136,6 +136,9 @@ int startup(int argc, char* argv[], unsigned int ret_flags)
         std::signal(SIGTERM, sigHandler);
 #endif
 
+#ifdef _WIN32
+        ReleaseWindowsLaunchLock();
+#endif
         exitval = a.exec();
     }
     else
@@ -161,5 +164,8 @@ int startup(int argc, char* argv[], unsigned int ret_flags)
         }
     }
 
+#ifdef _WIN32
+    ReleaseWindowsLaunchLock();
+#endif
     return(exitval);
 }

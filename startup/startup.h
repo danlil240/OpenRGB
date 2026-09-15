@@ -10,3 +10,7 @@
 #pragma once
 
 int startup(int argc, char* argv[], unsigned int ret_flags);
+
+#ifdef _WIN32
+void ReleaseWindowsLaunchLock();
+#endif
