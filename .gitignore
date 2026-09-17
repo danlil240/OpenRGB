@@ -21,7 +21,7 @@ OpenRGB Windows 64-bit/
 .pch/
 .rcc/
 .uic/
-.clangd/
+.clangd
 *_debug/
 *_release/
 debug/
