@@ -163,6 +163,21 @@ ProfileManager::~ProfileManager()
 
 }
 
+void ProfileManager::ApplyActiveProfilePluginData()
+{
+    /*-----------------------------------------------------*\
+    | The server only sends profile data to the clients     |
+    | connected at the time it loads, and plugins only      |
+    | exist in the GUI, so read it back here                |
+    \*-----------------------------------------------------*/
+    if(!active_profile.empty() && ResourceManager::get()->IsLocalClient() && (ResourceManager::get()->GetLocalClient()->GetSupportsProfileManagerAPI()))
+    {
+        LOG_DEBUG("[%s] Reading active profile for plugin data: %s", PROFILEMANAGER, active_profile.c_str());
+
+        OnProfileLoaded(ResourceManager::get()->GetLocalClient()->ProfileManager_DownloadProfile(active_profile));
+    }
+}
+
 void ProfileManager::ClearActiveProfile()
 {
     /*-------------------------------------------------*\
@@ -903,6 +918,8 @@ bool ProfileManager::SaveConfiguration()
     \*-----------------------------------------------------*/
     std::vector<RGBController *> controllers = ResourceManager::get()->GetRGBControllers();
 
+    configuration_save_mutex.lock();
+    
     /*-----------------------------------------------------*\
     | Open an output file in the profile directory          |
     \*-----------------------------------------------------*/
@@ -1004,6 +1021,8 @@ bool ProfileManager::SaveConfiguration()
     | Close the file when done                              |
     \*-----------------------------------------------------*/
     controller_file.close();
+
+    configuration_save_mutex.unlock();
 
     /*-----------------------------------------------------*\
     | Reinitialize manually configured controllers list     |
@@ -1274,6 +1293,8 @@ bool ProfileManager::LoadAutoProfile(std::string setting_name)
     \*-----------------------------------------------------*/
     if(!profile_name.empty())
     {
+        LOG_INFO("[%s] Loading %s: %s", PROFILEMANAGER, setting_name.c_str(), profile_name.c_str());
+
         return(LoadProfile(profile_name));
     }
     else
@@ -1549,6 +1570,23 @@ bool ProfileManager::LoadProfileWithOptions
     )
 {
     /*-------------------------------------------------*\
+    | Get JSON data for given profile name              |
+    \*-------------------------------------------------*/
+    nlohmann::json profile_json = ReadProfileJSON(profile_name);
+
+    /*-------------------------------------------------*\
+    | Stop here if the profile could not be read.       |
+    | Carrying on would clear the active profile and    |
+    | send an empty profile to connected clients.       |
+    \*-------------------------------------------------*/
+    if(profile_json.empty())
+    {
+        LOG_WARNING("[%s] Profile not found or empty, nothing to load: %s", PROFILEMANAGER, profile_name.c_str());
+
+        return(false);
+    }
+
+    /*-------------------------------------------------*\
     | Clear stored active profile data                  |
     \*-------------------------------------------------*/
     std::vector active_rgb_controllers_copy = active_rgb_controllers;
@@ -1561,11 +1599,6 @@ bool ProfileManager::LoadProfileWithOptions
     {
         delete active_rgb_controllers_copy[controller_idx];
     }
-
-    /*-------------------------------------------------*\
-    | Get JSON data for given profile name              |
-    \*-------------------------------------------------*/
-    nlohmann::json profile_json = ReadProfileJSON(profile_name);
 
     /*-------------------------------------------------*\
     | Load the controller state data for this profile   |

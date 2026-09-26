@@ -78,6 +78,8 @@ public:
     ProfileManager(const filesystem::path& config_dir);
     ~ProfileManager();
 
+    void                        ApplyActiveProfilePluginData();
+
     void                        ClearActiveProfile();
 
     void                        DeleteProfile(std::string profile_name);
@@ -156,6 +158,8 @@ private:
     filesystem::path            configuration_directory;
     filesystem::path            profile_directory;
 
+    std::mutex                  configuration_save_mutex;
+    
     /*-----------------------------------------------------*\
     | ProfileManager Callbacks                              |
     \*-----------------------------------------------------*/
