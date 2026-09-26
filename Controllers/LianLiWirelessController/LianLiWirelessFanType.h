@@ -96,4 +96,31 @@ namespace LianLiWireless
                 return { t, "Unknown wireless fan", 0, false };
         }
     }
+
+    /*---------------------------------------------------------*\
+    | Physical perimeter order of an SL V3's 40 frame LEDs:     |
+    | 12-LED top strip forward, 8-LED side strip reversed,      |
+    | 12-LED bottom strip reversed, 8-LED side strip forward.   |
+    | Iterating slots in this order follows the ring instead    |
+    | of zig-zagging across it. nullptr means linear order.     |
+    \*---------------------------------------------------------*/
+    inline constexpr uint8_t SLV3_LED_ORDER[40] =
+    {
+        0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11,
+       19, 18, 17, 16, 15, 14, 13, 12,
+       31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20,
+       32, 33, 34, 35, 36, 37, 38, 39
+    };
+
+    inline const uint8_t* FanLedOrder(WirelessFanType t)
+    {
+        switch(t)
+        {
+            case WirelessFanType::Slv3Led:
+            case WirelessFanType::Slv3Lcd:
+                return SLV3_LED_ORDER;
+            default:
+                return nullptr;
+        }
+    }
 }

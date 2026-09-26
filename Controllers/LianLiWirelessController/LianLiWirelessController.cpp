@@ -71,6 +71,42 @@ void LianLiWirelessController::SetLEDs(const RGBColor* led_colors, size_t count)
     }
 }
 
+void LianLiWirelessController::SetFrames(const std::vector<uint8_t>& rgb_frames,
+                                       uint16_t frame_count, uint16_t interval_ms)
+{
+    if(frame_count == 0
+       || rgb_frames.size() != (size_t)led_count * 3 * frame_count)
+    {
+        last_error = "animation payload does not match group layout";
+        return;
+    }
+
+    /*---------------------------------------------------------*\
+    | The wire format carries whole 0.625ms ticks plus a        |
+    | hundredths fraction (vendor uploader semantics):          |
+    | 1 ms = 1.6 ticks = 160 hundredths.                        |
+    \*---------------------------------------------------------*/
+    const uint32_t hundredths = (uint32_t)interval_ms * 160;
+
+    RgbTiming timing;
+    timing.interval_ticks    = (uint16_t)(hundredths / 100);
+    timing.interval_fraction = (uint8_t)(hundredths % 100);
+
+    try
+    {
+        auto upload = std::make_shared<RgbUpload>(
+            LianLiWirelessCodec::Compress(rgb_frames.data(), rgb_frames.size()),
+            led_count, frame_count, timing,
+            (uint8_t)(upload_variant.fetch_add(1) & 0xFF));
+
+        service.SetDesired(mac, std::move(upload));
+    }
+    catch(const std::exception& e)
+    {
+        last_error = e.what();
+    }
+}
+
 std::string LianLiWirelessController::GetMacString() const
 {
     char buf[18];

@@ -72,6 +72,7 @@ namespace LianLiWireless
     struct WirelessRuntimeConfig
     {
         uint64_t poll_ms          = 300;
+        uint64_t stream_ms        = 25;     /* minimum gap between RGB uploads */
         uint64_t resend_ms        = 1500;
         uint64_t keepalive_ms     = 750;
         uint64_t lost_ms          = 8000;
@@ -134,6 +135,7 @@ namespace LianLiWireless
         uint64_t             last_seen_ms = 0;
 
         std::shared_ptr<const RgbUpload> desired;
+        uint64_t             next_stream_ms = 0;
         uint64_t             next_resend_ms = 0;
         uint32_t             resends = 0;
         uint32_t             send_failures = 0;

@@ -21,6 +21,7 @@
 #include "RGBControllerInterface.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 class LianLiWirelessController
 {
@@ -37,8 +38,18 @@ public:
 
     void        SetLEDs(const RGBColor* led_colors, size_t count);
 
+    /*---------------------------------------------------------*\
+    | Upload a pre-rendered animation loop: rgb_frames holds    |
+    | frame_count frames of led_count RGB bytes, frame-major.   |
+    | The firmware cycles the frames at interval_ms per frame   |
+    | without further host traffic.                             |
+    \*---------------------------------------------------------*/
+    void        SetFrames(const std::vector<uint8_t>& rgb_frames,
+                          uint16_t frame_count, uint16_t interval_ms);
+
     std::string GetMacString()  const;
     std::string GetFanName()    const { return fan_info.name; }
+    LianLiWireless::WirelessFanType GetFanType() const { return fan_info.type; }
     uint8_t     GetFanCount()   const { return fan_count; }
     uint8_t     GetLEDsPerFan() const { return fan_info.leds_per_fan; }
     uint8_t     GetLEDCount()   const { return led_count; }

@@ -7,8 +7,48 @@
 
 #include "LianLiWirelessService.h"
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 
 using namespace LianLiWireless;
+
+namespace
+{
+    using TraceClock = std::chrono::steady_clock;
+
+    void TraceService(const char* event, long long first,
+                      long long second, long long third)
+    {
+        static const char* trace_path = std::getenv("OPENRGB_LIANLI_TRACE");
+        if(trace_path == nullptr || *trace_path == '\0')
+        {
+            return;
+        }
+
+        static std::mutex trace_mutex;
+        static const TraceClock::time_point origin = TraceClock::now();
+        static std::ofstream trace(trace_path, std::ios::out | std::ios::trunc);
+        static unsigned int rows = 0;
+
+        std::lock_guard<std::mutex> lock(trace_mutex);
+        if(!trace.is_open())
+        {
+            return;
+        }
+        if(rows == 0)
+        {
+            trace << "time_us,event,first_us,second_us,third\n";
+        }
+        const long long time_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            TraceClock::now() - origin).count();
+        trace << time_us << ',' << event << ',' << first << ','
+              << second << ',' << third << '\n';
+        if((++rows % 20) == 0)
+        {
+            trace.flush();
+        }
+    }
+}
 
 LianLiWirelessService::LianLiWirelessService(IWirelessLink& link_in,
                                              IWirelessClock& clock_in,
@@ -61,11 +101,30 @@ std::vector<Mac> LianLiWirelessService::Groups() const
 void LianLiWirelessService::SetDesired(const Mac& mac,
                                        std::shared_ptr<const RgbUpload> upload)
 {
-    std::lock_guard<std::mutex> lock(mutex);
-    auto it = runtimes.find(mac);
-    if(it != runtimes.end())
+    const auto begin = TraceClock::now();
+    const long long packets = upload ? (long long)upload->PacketCount() : 0;
+    bool accepted = false;
+    TraceClock::time_point acquired;
+    TraceClock::time_point finished;
     {
-        it->second->SetDesired(std::move(upload));
+        std::lock_guard<std::mutex> lock(mutex);
+        acquired = TraceClock::now();
+        auto it = runtimes.find(mac);
+        if(it != runtimes.end())
+        {
+            it->second->SetDesired(std::move(upload));
+            accepted = true;
+        }
+        finished = TraceClock::now();
+    }
+    TraceService("set_desired",
+        std::chrono::duration_cast<std::chrono::microseconds>(acquired - begin).count(),
+        std::chrono::duration_cast<std::chrono::microseconds>(finished - acquired).count(),
+        packets);
+    if(accepted)
+    {
+        wake_requested = true;
+        wake_cv.notify_one();
     }
 }
 
@@ -104,11 +163,24 @@ bool LianLiWirelessService::GetStatus(const Mac& mac, GroupStatus& out) const
 
 void LianLiWirelessService::StepAll()
 {
-    std::lock_guard<std::mutex> lock(mutex);
-    for(auto& kv : runtimes)
+    const auto begin = TraceClock::now();
+    TraceClock::time_point acquired;
+    TraceClock::time_point finished;
+    long long group_count = 0;
     {
-        kv.second->Tick();
+        std::lock_guard<std::mutex> lock(mutex);
+        acquired = TraceClock::now();
+        group_count = (long long)runtimes.size();
+        for(auto& kv : runtimes)
+        {
+            kv.second->Tick();
+        }
+        finished = TraceClock::now();
     }
+    TraceService("step_all",
+        std::chrono::duration_cast<std::chrono::microseconds>(acquired - begin).count(),
+        std::chrono::duration_cast<std::chrono::microseconds>(finished - acquired).count(),
+        group_count);
 }
 
 void LianLiWirelessService::Start(uint32_t tick_ms)
@@ -118,12 +190,18 @@ void LianLiWirelessService::Start(uint32_t tick_ms)
         return;
     }
     stop = false;
+    wake_requested = false;
     worker = std::thread([this, tick_ms]
     {
         while(!stop.load())
         {
             StepAll();
-            std::this_thread::sleep_for(std::chrono::milliseconds(tick_ms));
+            std::unique_lock<std::mutex> wait_lock(wake_mutex);
+            wake_cv.wait_for(wait_lock, std::chrono::milliseconds(tick_ms),
+                [this]
+                {
+                    return stop.load() || wake_requested.exchange(false);
+                });
         }
     });
 }
@@ -131,6 +209,7 @@ void LianLiWirelessService::Start(uint32_t tick_ms)
 void LianLiWirelessService::Stop()
 {
     stop = true;
+    wake_cv.notify_all();
     if(worker.joinable())
     {
         worker.join();

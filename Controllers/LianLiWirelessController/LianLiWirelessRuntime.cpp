@@ -26,7 +26,17 @@ void WirelessRuntime::SetTarget(const Mac& mac, uint8_t fans)
 void WirelessRuntime::SetDesired(std::shared_ptr<const RgbUpload> upload)
 {
     desired        = std::move(upload);
-    next_resend_ms = 0;          /* send ASAP on next Tick */
+    /* Newest frame wins, but never bypass the RF upload budget. */
+    const uint64_t now = clock.NowMs();
+    next_resend_ms = now > next_stream_ms ? now : next_stream_ms;
+    /* A live stream changes effect_id faster than discovery can confirm it.
+       Once identity/channel are known, postpone the blocking RX poll from
+       the newest frame so continuous animation keeps the TX path clear.
+       Discovery resumes one normal poll interval after the stream stops. */
+    if(have_sighting)
+    {
+        next_poll_ms = now + cfg.poll_ms;
+    }
     resends        = 0;
     drift_mismatch = 0;
     if(state == WirelessState::Holding)
@@ -91,6 +101,7 @@ void WirelessRuntime::RetryTransport()
     resends = 0;
     drift_mismatch = 0;
     next_poll_ms = 0;
+    next_stream_ms = 0;
     next_resend_ms = 0;
     next_keepalive_ms = 0;
     keepalive_initial = true;
@@ -162,80 +173,76 @@ void WirelessRuntime::Tick()
         }
     }
 
-    if(now < next_poll_ms)
+    if(now >= next_poll_ms)
     {
-        return;
-    }
-    next_poll_ms = now + (state == WirelessState::Holding ? cfg.hold_drift_ms
-                                                         : cfg.poll_ms);
+        next_poll_ms = now + (state == WirelessState::Holding ? cfg.hold_drift_ms
+                                                             : cfg.poll_ms);
 
-    if(!PollAndMerge(now))
-    {
-        return;                 /* transport poll failure or Lost handled inside */
-    }
+        if(!PollAndMerge(now))
+        {
+            return;             /* transport failure or Lost handled inside */
+        }
 
-    switch(state)
-    {
-        case WirelessState::Searching:
-            if(have_sighting)
-            {
-                Enter(desired ? WirelessState::Uploading : WirelessState::Holding);
-            }
-            break;
-
-        case WirelessState::Uploading:
-        case WirelessState::Holding:
-        case WirelessState::Lost:
-            if(desired && have_sighting)
-            {
-                if(latest.effect_id == desired->EffectId())
+        switch(state)
+        {
+            case WirelessState::Searching:
+                if(have_sighting)
                 {
-                    drift_mismatch = 0;
-                    resends        = 0;
-                    if(state != WirelessState::Holding)
-                    {
-                        Enter(WirelessState::Holding);
-                    }
+                    Enter(desired ? WirelessState::Uploading : WirelessState::Holding);
                 }
-                else if(state == WirelessState::Holding)
+                break;
+
+            case WirelessState::Uploading:
+            case WirelessState::Holding:
+            case WirelessState::Lost:
+                if(desired && have_sighting)
                 {
-                    /*----------------------------------------------*\
-                    | Confirmed effect drifted (firmware reset /     |
-                    | re-association) — resend after debounce.       |
-                    \*----------------------------------------------*/
-                    if(++drift_mismatch >= cfg.drift_debounce)
+                    if(latest.effect_id == desired->EffectId())
                     {
+                        drift_mismatch = 0;
+                        resends        = 0;
+                        if(state != WirelessState::Holding)
+                        {
+                            Enter(WirelessState::Holding);
+                        }
+                    }
+                    else if(state == WirelessState::Holding)
+                    {
+                        /* Confirmed effect drifted: debounce before resend. */
+                        if(++drift_mismatch >= cfg.drift_debounce)
+                        {
+                            drift_mismatch = 0;
+                            Enter(WirelessState::Uploading);
+                            next_resend_ms = now;
+                        }
+                    }
+                    else if(state == WirelessState::Lost)
+                    {
+                        /* Returning target gets a fresh resend budget. */
+                        resends        = 0;
                         drift_mismatch = 0;
                         Enter(WirelessState::Uploading);
                         next_resend_ms = now;
                     }
                 }
-                else if(state == WirelessState::Lost)
+                else if(!desired && have_sighting && state == WirelessState::Lost)
                 {
-                    /*----------------------------------------------*\
-                    | Device returned reporting a different effect — |
-                    | resume uploading with a fresh resend budget;   |
-                    | sends during the absence were not progress.    |
-                    \*----------------------------------------------*/
-                    resends        = 0;
-                    drift_mismatch = 0;
-                    Enter(WirelessState::Uploading);
-                    next_resend_ms = now;
+                    Enter(WirelessState::Holding);
                 }
+                break;
 
-                if(state == WirelessState::Uploading && !keepalive_initial && now >= next_resend_ms)
-                {
-                    SendDesired(now);
-                }
-            }
-            else if(!desired && have_sighting && state == WirelessState::Lost)
-            {
-                Enter(WirelessState::Holding);
-            }
-            break;
+            default:
+                break;
+        }
+    }
 
-        default:
-            break;
+    /* Discovery confirms identity and channel, but it must not gate
+       every animation frame. Keep-alive still has first priority. */
+    if(state == WirelessState::Uploading && desired && have_sighting
+       && !keepalive_initial && now >= next_resend_ms
+       && now >= next_stream_ms)
+    {
+        SendDesired(now);
     }
 }
 
@@ -396,6 +403,7 @@ bool WirelessRuntime::SendDesired(uint64_t now)
 
     send_failures  = 0;
     resends++;
+    next_stream_ms = now + cfg.stream_ms;
     next_resend_ms = now + cfg.resend_ms;
     return true;
 }

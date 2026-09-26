@@ -15,6 +15,7 @@
 
 #include "LianLiWirelessRuntime.h"
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -79,5 +80,8 @@ namespace LianLiWireless
         std::map<Mac, std::unique_ptr<WirelessRuntime>> runtimes;
         std::thread           worker;
         std::atomic<bool>     stop{false};
+        std::mutex            wake_mutex;
+        std::condition_variable wake_cv;
+        std::atomic<bool>     wake_requested{false};
     };
 }
